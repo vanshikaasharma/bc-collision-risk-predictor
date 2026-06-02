@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Data (too large for GitHub; download from ICBC locally)
+data/raw/*.csv
+*_Full Data_data.csv
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
