@@ -1,4 +1,4 @@
-# Compare models on test set, then save whichevergives best results
+# Compare models on test set, then save whichever gives best results
 import json
 from pathlib import Path
 
