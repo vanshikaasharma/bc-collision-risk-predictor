@@ -8,6 +8,8 @@ venv/
 data/raw/*.csv
 data/processed/*.csv
 *_Full Data_data.csv
+models/*.joblib
+models/metrics.json
 
 # OS / IDE
 .DS_Store
