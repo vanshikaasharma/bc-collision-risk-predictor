@@ -1,15 +1,16 @@
-# Compare classifiers with temporal holdout, then save best model on all years
+# Compare regressors with temporal holdout, then save XGBoost on all years
 import json
 from pathlib import Path
 
 import joblib
+import numpy as np
 from sklearn.compose import ColumnTransformer
-from sklearn.dummy import DummyClassifier
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, roc_auc_score
+from sklearn.dummy import DummyRegressor
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.preprocessing import OneHotEncoder
-from xgboost import XGBClassifier
+from xgboost import XGBRegressor
 
 from train_utils import (
     CAT_COLS,
@@ -31,14 +32,14 @@ def make_encoder(feature_cols):
     ])
 
 
-def compare_classifiers(X_train, y_train, X_test, y_test, encoder):
+def compare_regressors(X_train, y_train, X_test, y_test, encoder):
     models = {
-        "Dummy": DummyClassifier(strategy="most_frequent"),
-        "Logistic Regression": LogisticRegression(max_iter=1000),
-        "Random Forest": RandomForestClassifier(
+        "Dummy (mean)": DummyRegressor(strategy="mean"),
+        "Linear Regression": LinearRegression(),
+        "Random Forest": RandomForestRegressor(
             n_estimators=100, max_depth=8, random_state=42, n_jobs=-1
         ),
-        "XGBoost": XGBClassifier(
+        "XGBoost": XGBRegressor(
             n_estimators=100, max_depth=5, learning_rate=0.1, random_state=42
         ),
     }
@@ -48,21 +49,26 @@ def compare_classifiers(X_train, y_train, X_test, y_test, encoder):
     comparison = []
     best_name = None
     best_model = None
-    best_auc = -1
+    best_r2 = -999
 
     for name, model in models.items():
         model.fit(X_train_enc, y_train)
         pred = model.predict(X_test_enc)
-        proba = model.predict_proba(X_test_enc)[:, 1]
-        acc = accuracy_score(y_test, pred)
-        auc = roc_auc_score(y_test, proba)
-        comparison.append({"model": name, "accuracy": round(acc, 3), "roc_auc": round(auc, 3)})
-        if name != "Dummy" and auc > best_auc:
-            best_auc = auc
+        mae = mean_absolute_error(y_test, pred)
+        rmse = np.sqrt(mean_squared_error(y_test, pred))
+        r2 = r2_score(y_test, pred)
+        comparison.append({
+            "model": name,
+            "mae": round(mae, 3),
+            "rmse": round(rmse, 3),
+            "r2": round(r2, 3),
+        })
+        if name != "Dummy (mean)" and r2 > best_r2:
+            best_r2 = r2
             best_name = name
             best_model = model
 
-    return comparison, best_name, best_model, best_auc, encoder
+    return comparison, best_name, best_model, best_r2, encoder
 
 
 df, top_streets = load_training_df()
@@ -70,26 +76,25 @@ models_dir = Path("models")
 models_dir.mkdir(exist_ok=True)
 
 temporal_results = []
-print("Temporal holdout (train past years → test one future year, no year feature):\n")
+print("Regressor temporal holdout (no year feature):\n")
 
 for fold in TEMPORAL_FOLDS:
     train_df, test_df = temporal_split(df, fold["train_max_year"], fold["test_year"])
     feat = FEATURE_COLS_TEMPORAL
-    X_train, y_train = train_df[feat], train_df["high_risk"]
-    X_test, y_test = test_df[feat], test_df["high_risk"]
+    X_train, y_train = train_df[feat], train_df["risk_score"]
+    X_test, y_test = test_df[feat], test_df["risk_score"]
 
     encoder = make_encoder(feat)
-    comparison, best_name, _, best_auc, _ = compare_classifiers(
+    comparison, best_name, _, best_r2, _ = compare_regressors(
         X_train, y_train, X_test, y_test, encoder
     )
 
-    print(f"Train {fold['train_label']} → test {fold['test_year']} "
-          f"({len(train_df):,} / {len(test_df):,} rows)")
-    print(f"{'Model':<28} {'Accuracy':>10} {'ROC-AUC':>10}")
+    print(f"Train {fold['train_label']} → test {fold['test_year']}")
+    print(f"{'Model':<22} {'MAE':>8} {'RMSE':>8} {'R²':>8}")
     print("-" * 50)
     for row in comparison:
-        print(f"{row['model']:<28} {row['accuracy']:>10.3f} {row['roc_auc']:>10.3f}")
-    print(f"Best: {best_name} (ROC-AUC {best_auc:.3f})\n")
+        print(f"{row['model']:<22} {row['mae']:>8.3f} {row['rmse']:>8.3f} {row['r2']:>8.3f}")
+    print(f"Best: {best_name} (R² {best_r2:.3f})\n")
 
     temporal_results.append({
         "train_years": fold["train_label"],
@@ -98,29 +103,27 @@ for fold in TEMPORAL_FOLDS:
         "test_rows": len(test_df),
         "comparison": comparison,
         "best_model": best_name,
-        "best_roc_auc": round(best_auc, 3),
+        "best_r2": round(best_r2, 3),
     })
 
 primary = temporal_results[0]
-metrics = {
+(models_dir / "regressor_metrics.json").write_text(json.dumps({
+    "target": "risk_score",
     "eval_method": "temporal_holdout",
     "features_temporal": FEATURE_COLS_TEMPORAL,
     "temporal_folds": temporal_results,
     "comparison": primary["comparison"],
     "best_model": primary["best_model"],
-    "best_roc_auc": primary["best_roc_auc"],
+    "best_r2": primary["best_r2"],
     "primary_test_year": primary["test_year"],
-}
+}, indent=2))
 
-(models_dir / "metrics.json").write_text(json.dumps(metrics, indent=2))
-
-# Production bundle: all years, includes year (dashboard scenario picker)
 X_all = df[FEATURE_COLS]
-y_all = df["high_risk"]
+y_all = df["risk_score"]
 prod_encoder = make_encoder(FEATURE_COLS)
 X_enc = prod_encoder.fit_transform(X_all)
 
-prod_model = XGBClassifier(
+prod_model = XGBRegressor(
     n_estimators=100, max_depth=5, learning_rate=0.1, random_state=42
 )
 prod_model.fit(X_enc, y_all)
@@ -132,10 +135,10 @@ joblib.dump(
         "feature_cols": FEATURE_COLS,
         "model_name": "XGBoost",
         "top_streets": top_streets,
+        "target": "risk_score",
         "trained_on": "all years 2021–2025",
     },
-    models_dir / "risk_model.joblib",
+    models_dir / "risk_regressor.joblib",
 )
 
-print(f"Saved metrics.json ({len(TEMPORAL_FOLDS)} temporal folds)")
-print(f"Saved risk_model.joblib (XGBoost on all {len(df):,} rows, year in features)")
+print("Saved regressor_metrics.json and risk_regressor.joblib")

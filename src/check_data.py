@@ -15,9 +15,11 @@ keep_cols = [
     "Crash Severity",
     "Derived Crash Configuration",
     "Time Category",
-    "Region",
     "Total Victims",
     "Intersection Crash",
+    "Latitude",
+    "Longitude",
+    "Street Full Name",
 ]
 
 df = df[keep_cols].copy()
@@ -30,9 +32,11 @@ df = df.rename(columns={
     "Crash Severity": "severity",
     "Derived Crash Configuration": "collision_type",
     "Time Category": "time_category",
-    "Region": "region",
     "Total Victims": "total_victims",
     "Intersection Crash": "intersection_crash",
+    "Latitude": "latitude",
+    "Longitude": "longitude",
+    "Street Full Name": "street",
 })
 
 
@@ -59,7 +63,12 @@ df["hour"] = df["time_category"].astype(str).str.strip().map(time_map)
 
 # Cleaning the labels
 df["municipality"] = df["municipality"].astype(str).str.title()
-df["region"] = df["region"].astype(str).str.title()
+df["latitude"] = pd.to_numeric(df["latitude"], errors="coerce")
+df["longitude"] = pd.to_numeric(df["longitude"], errors="coerce")
+
+# Street names — normalize; drop useless values
+df["street"] = df["street"].astype(str).str.strip().str.upper()
+df.loc[df["street"].isin(["", "UNKNOWN", "NAN", "NONE"]), "street"] = pd.NA
 
 # Saving the cleaned data (faster to reload next time)
 clean_path.parent.mkdir(parents=True, exist_ok=True)
